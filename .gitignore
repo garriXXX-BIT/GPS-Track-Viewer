@@ -1,0 +1,30 @@
+# ===== GPS 轨迹数据（含个人位置信息，切勿提交） =====
+*.gpx
+*.kml
+*.fit
+*.tcx
+*.gdb
+
+# ===== Node / 前端工具链（若未来引入） =====
+node_modules/
+npm-debug.log*
+yarn-error.log*
+package-lock.json
+dist/
+build/
+
+# ===== 操作系统垃圾文件 =====
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ===== 编辑器 / IDE =====
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ===== 日志与临时文件 =====
+*.log
+*.tmp

@@ -1,0 +1,1567 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>GPS 轨迹 3D 可视化 · 卫星底图</title>
+<style>
+  :root { --bg:#0f1219; --panel:rgba(20,26,38,.92); --text:#e6edf3; --accent:#4da3ff; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; overflow:hidden; background:var(--bg); color:var(--text);
+    font-family: system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; }
+  #app { position:fixed; inset:0; }
+  canvas { display:block; }
+  .panel {
+    display:flex; flex-direction:column; overflow:hidden;
+    background:var(--panel); border:1px solid rgba(255,255,255,.08);
+    border-radius:12px; backdrop-filter: blur(8px);
+  }
+  .panel-header {
+    display:flex; align-items:center; justify-content:space-between; gap:10px;
+    padding:10px 12px; flex:0 0 auto; user-select:none;
+    border-bottom:1px solid rgba(255,255,255,.06);
+  }
+  .panel-title { font-size:13px; font-weight:700; color:var(--text); }
+  .collapse-btn {
+    cursor:pointer; border:none; border-radius:6px; padding:4px 10px;
+    font-size:11px; font-weight:600; color:var(--text); background:rgba(255,255,255,.1);
+    flex:0 0 auto;
+  }
+  .collapse-btn:hover { filter:brightness(1.15); }
+  .panel-body { display:flex; flex-direction:column; gap:10px; padding:12px; overflow-y:auto; flex:1 1 auto; min-height:0; }
+  .panel-left { position:fixed; top:12px; left:12px; z-index:10; width:290px; max-height:calc(100vh - 24px); }
+  .panel-right { position:fixed; top:12px; right:12px; z-index:10; width:216px; max-height:calc(100vh - 24px); }
+  .panel-status { position:fixed; left:12px; bottom:12px; z-index:10; max-width:min(60vw, 460px); max-height:48vh; }
+  .panel-rec { position:fixed; right:12px; bottom:44px; z-index:10; width:250px; max-height:56vh; }
+  .sub { font-size:11px; color:#8b98a9; }
+  .row { display:flex; gap:8px; align-items:center; }
+  button, .file-label {
+    cursor:pointer; border:none; border-radius:8px; padding:9px 12px;
+    font-size:13px; font-weight:600; color:#0b0e14; background:var(--accent);
+    transition: filter .15s; text-align:center; flex:1;
+  }
+  button:hover:not(:disabled), .file-label:hover { filter:brightness(1.12); }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+  .file-label input { display:none; }
+  .ghost { background:rgba(255,255,255,.1); color:var(--text); }
+  select {
+    width:100%; padding:8px 10px; border-radius:8px; border:1px solid rgba(255,255,255,.12);
+    background:rgba(255,255,255,.08); color:var(--text); font-size:13px; cursor:pointer;
+  }
+  .slider-row { display:flex; flex-direction:column; gap:4px; font-size:12px; color:#c9d4e0; }
+  .slider-row input { width:100%; accent-color:var(--accent); }
+  .legend { display:flex; align-items:center; gap:8px; font-size:11px; color:#c9d4e0; }
+  .legend .bar { flex:1; height:10px; border-radius:5px;
+    background: linear-gradient(to right,#2c7bb6,#00a398,#ffffbf,#f46d43,#d7191c); }
+  .dashboard { display:flex; gap:8px; }
+  .metric {
+    flex:1; display:flex; flex-direction:column; gap:2px; padding:8px 10px;
+    background:rgba(255,255,255,.06); border-radius:8px; border:1px solid rgba(255,255,255,.08);
+  }
+  .metric .label { font-size:10px; color:#8b98a9; }
+  .metric .value { font-size:15px; font-weight:700; color:var(--text); font-variant-numeric: tabular-nums; }
+  .pos { font-size:11px; color:#c9d4e0; text-align:center; font-variant-numeric: tabular-nums; }
+
+  .help-hint { font-size:11px; color:#8b98a9; line-height:1.8; }
+  .help-hint b { color:#c9d4e0; font-weight:600; }
+  .dial-wrap { display:flex; flex-direction:column; align-items:center; gap:2px; }
+  .dial-wrap svg { cursor:grab; touch-action:none; }
+  .dial-wrap svg:active { cursor:grabbing; }
+  .dial-label { font-size:12px; color:#c9d4e0; }
+
+  #status { font-size:12px; color:#8b98a9; white-space:pre-line; line-height:1.55; }
+  .attribution {
+    position:fixed; right:8px; bottom:8px; z-index:10; font-size:11px; color:#cbd5e1;
+    background:rgba(15,18,25,.78); padding:6px 10px; border-radius:6px; max-width:70vw;
+    line-height:1.5; text-align:right;
+  }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<div class="panel panel-left" id="toolbarPanel">
+  <div class="panel-header">
+    <span class="panel-title">GPS 轨迹 3D 可视化</span>
+    <button class="collapse-btn" id="toolbarCollapse">收起</button>
+  </div>
+  <div class="panel-body" id="toolbarBody">
+    <div class="sub">支持 .gpx / .kml 文件 · 卫星底图</div>
+  <label class="file-label">选择轨迹文件
+    <input id="file" type="file" accept=".gpx,.kml,application/gpx+xml,application/vnd.google-earth.kml+xml" />
+  </label>
+  <div class="slider-row">
+    <span>海拔纵向夸张：<b id="elevVal">1.0</b>x</span>
+    <input id="elevScale" type="range" min="0.2" max="20" step="0.1" value="1.0" />
+  </div>
+  <select id="colorMode">
+    <option value="elevation">按海拔着色</option>
+  </select>
+  <div class="legend"><span>低</span><span class="bar"></span><span>高</span></div>
+  <select id="groundMode">
+    <option value="satellite">底图：平面卫星图</option>
+    <option value="terrain">底图：真实地形 3D</option>
+    <option value="grid">底图：网格</option>
+  </select>
+  <div class="row">
+    <button id="playBtn" class="ghost">▶ 播放</button>
+  </div>
+  <div class="slider-row">
+    <span>播放速度：<b id="speedVal">1</b>x</span>
+    <input id="playSpeed" type="range" min="0.25" max="16" step="0.25" value="1" />
+  </div>
+  <div class="slider-row">
+    <span id="tlLabel">时间轴 / 进度</span>
+    <input id="playhead" type="range" min="0" max="1000" value="0" />
+  </div>
+  <div class="dashboard">
+    <div class="metric"><span class="label">速度</span><span class="value" id="dSpeed">—</span></div>
+    <div class="metric"><span class="label">海拔</span><span class="value" id="dEle">—</span></div>
+    <div class="metric"><span class="label">心率</span><span class="value" id="dHr">—</span></div>
+  </div>
+  <div class="pos" id="dPos">—</div>
+  <div class="row">
+    <button id="exportGLB" disabled>导出 .glb</button>
+    </div>
+  </div>
+</div>
+
+<div class="panel panel-right" id="helpPanel">
+  <div class="panel-header">
+    <span class="panel-title">视角操作</span>
+    <button class="collapse-btn" id="helpCollapse">收起</button>
+  </div>
+  <div class="panel-body" id="helpBody">
+  <div class="help-hint">
+    <div>🖱 <b>拖拽</b> —— 平移（卫星图）</div>
+    <div>🖱 <b>滚轮</b> —— 缩放 / 调高度</div>
+    <div>↻ <b>圆盘</b> —— 旋转视角（卫星图）</div>
+    <div>🔄 <b>左键拖拽</b> —— 3D 旋转（网格图）</div>
+  </div>
+  <div class="slider-row">
+    <span>平移灵敏度 <b id="panSpeedVal">2.5</b></span>
+    <input id="panSpeed" type="range" min="0.1" max="5" step="0.1" value="2.5" />
+  </div>
+  <div class="slider-row">
+    <span>缩放灵敏度 <b id="zoomSpeedVal">2.0</b></span>
+    <input id="zoomSpeed" type="range" min="0.1" max="5" step="0.1" value="2.0" />
+  </div>
+  <div class="dial-wrap">
+    <svg id="dial" width="140" height="140" viewBox="0 0 140 140"></svg>
+    <div class="dial-label">方位角 <b id="bearingVal">0</b>°</div>
+  </div>
+  </div>
+</div>
+
+<div class="attribution" id="attribution" style="display:none">
+  Tiles © Esri — Esri, Maxar, Earthstar Geographics, and the GIS User Community
+</div>
+<div class="panel panel-status" id="statusPanel">
+  <div class="panel-header">
+    <span class="panel-title">已加载信息</span>
+    <button class="collapse-btn" id="statusCollapse">收起</button>
+  </div>
+  <div class="panel-body" id="statusBody">
+    <div id="status">请选择 .gpx 或 .kml 文件</div>
+  </div>
+</div>
+
+<div class="panel panel-rec" id="recPanel">
+  <div class="panel-header">
+    <span class="panel-title">视频录制</span>
+    <button class="collapse-btn" id="recCollapse">收起</button>
+  </div>
+  <div class="panel-body" id="recBody">
+    <div class="sub" id="recBaseHint">底图：平面卫星图</div>
+    <select id="recMode"></select>
+    <div class="row" style="align-items:center;">
+      <input id="recSync" type="checkbox" checked style="width:auto; accent-color:var(--accent);" />
+      <label for="recSync" style="font-size:12px; color:#c9d4e0; cursor:pointer;">轨迹点从起点同步运动</label>
+    </div>
+    <select id="recFormat">
+      <option value="webm">导出格式：WebM（默认）</option>
+      <option value="mp4">导出格式：MP4</option>
+    </select>
+    <div class="slider-row" id="recPointRow" style="display:none">
+      <span>录制点</span>
+      <select id="recPoint"></select>
+    </div>
+    <div class="row">
+      <button id="recPointPick" class="ghost" style="display:none">📍 点选地图标定录制点</button>
+    </div>
+    <div class="slider-row" id="recHeightRow">
+      <span>录制高度 <b id="recHeightVal">自动</b></span>
+      <input id="recHeight" type="range" min="0" max="2" step="0.05" value="0" />
+    </div>
+    <div class="slider-row" id="recLookRow">
+      <span>前视距离 <b id="recLookVal">0.30x</b></span>
+      <input id="recLook" type="range" min="0.05" max="1" step="0.05" value="0.3" />
+    </div>
+    <div class="slider-row">
+      <span>时长 <b id="recDurVal">15s</b></span>
+      <input id="recDuration" type="range" min="3" max="60" step="1" value="15" />
+    </div>
+    <button id="recStart" class="ghost">● 开始录制</button>
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
+
+/* ================= 常量 ================= */
+const R_EARTH = 6371000;
+const R_MERC  = 6378137;
+const WORLD_SIZE = 2 * Math.PI * R_MERC;
+const ESRI_TILE_URL =
+  'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
+const ESRI_ATTRIBUTION =
+  'Tiles © Esri — Esri, Maxar, Earthstar Geographics, and the GIS User Community';
+const PLAYBACK_DURATION = 30;
+const DEG2RAD = Math.PI / 180;
+const AWS_TERRAIN_URL = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
+const TERRAIN_GRID = 256;   // 地形网格每边单元格数（提高精细化，减少穿模）
+
+const COLORMAP = [
+  [0.0, 0x2c7bb6], [0.33, 0x00a398], [0.55, 0xffffbf],
+  [0.8, 0xf46d43], [1.0, 0xd7191c],
+].map(([t, hex]) => [t, new THREE.Color(hex)]);
+
+/* ================= Web Mercator 与瓦片 ================= */
+function mercX(lon) { return R_MERC * lon * Math.PI / 180; }
+function mercY(lat) {
+  const r = lat * Math.PI / 180;
+  return R_MERC * Math.log(Math.tan(Math.PI / 4 + r / 2));
+}
+function lonToTileX(lon, z) { return (lon + 180) / 360 * Math.pow(2, z); }
+function latToTileY(lat, z) {
+  const r = lat * Math.PI / 180;
+  return (1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * Math.pow(2, z);
+}
+function tileRangeAt(points, z) {
+  let minLat = 90, maxLat = -90, minLon = 180, maxLon = -180;
+  for (const p of points) {
+    if (p.lat < minLat) minLat = p.lat;
+    if (p.lat > maxLat) maxLat = p.lat;
+    if (p.lon < minLon) minLon = p.lon;
+    if (p.lon > maxLon) maxLon = p.lon;
+  }
+  const n = Math.pow(2, z);
+  let minX = Math.floor(lonToTileX(minLon, z));
+  let maxX = Math.floor(lonToTileX(maxLon, z));
+  let minY = Math.floor(latToTileY(maxLat, z));
+  let maxY = Math.floor(latToTileY(minLat, z));
+  minX = Math.max(0, minX - 1); maxX = Math.min(n - 1, maxX + 1);
+  minY = Math.max(0, minY - 1); maxY = Math.min(n - 1, maxY + 1);
+  return { z, minX, maxX, minY, maxY };
+}
+function lonToTileXf(lon, z) { return (lon + 180) / 360 * Math.pow(2, z); }
+function latToTileYf(lat, z) {
+  const r = lat * Math.PI / 180;
+  return (1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * Math.pow(2, z);
+}
+function computeTileRange(points) {
+  let minLat = 90, maxLat = -90, minLon = 180, maxLon = -180;
+  for (const p of points) {
+    if (p.lat < minLat) minLat = p.lat;
+    if (p.lat > maxLat) maxLat = p.lat;
+    if (p.lon < minLon) minLon = p.lon;
+    if (p.lon > maxLon) maxLon = p.lon;
+  }
+  const longSide = Math.max(mercX(maxLon) - mercX(minLon), mercY(maxLat) - mercY(minLat));
+  let z = Math.round(Math.log2(WORLD_SIZE * 5 / longSide));
+  z = THREE.MathUtils.clamp(z, 4, 17);
+  return tileRangeAt(points, z);
+}
+
+/* ================= 场景初始化 ================= */
+const container = document.getElementById('app');
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+container.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x10141f);
+
+const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 1e7);
+camera.position.set(50, 40, 50);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.1;
+controls.screenSpacePanning = true;
+controls.zoomToCursor = true;
+controls.panSpeed = 2.5;    // 平移灵敏度（默认 1，调高提升手感）
+controls.zoomSpeed = 2.0;   // 缩放灵敏度
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.65));
+const dirLight = new THREE.DirectionalLight(0xffffff, 1.1);
+dirLight.position.set(1, 1.5, 0.8).normalize();
+scene.add(dirLight);
+scene.add(new THREE.HemisphereLight(0xbfd4ff, 0x30343f, 0.5));
+
+const exportGroup = new THREE.Group();
+exportGroup.name = 'GPS-Track';
+scene.add(exportGroup);
+
+const satelliteGroup = new THREE.Group();
+satelliteGroup.name = 'Satellite-Ground';
+scene.add(satelliteGroup);
+
+const terrainGroup = new THREE.Group();
+terrainGroup.name = 'Terrain';
+terrainGroup.visible = false;
+scene.add(terrainGroup);
+
+const tileLoader = new THREE.TextureLoader();
+tileLoader.setCrossOrigin('anonymous');
+
+const playheadMarker = new THREE.Mesh(
+  new THREE.SphereGeometry(1, 16, 16),
+  new THREE.MeshBasicMaterial({ color: 0xff5533 })
+);
+playheadMarker.visible = false;
+scene.add(playheadMarker);
+
+const polePositions = new THREE.BufferAttribute(new Float32Array(6), 3);
+const poleGeo = new THREE.BufferGeometry();
+poleGeo.setAttribute('position', polePositions);
+const playheadPole = new THREE.Line(poleGeo,
+  new THREE.LineBasicMaterial({ color: 0xff5533, transparent: true, opacity: 0.6 }));
+playheadPole.visible = false;
+scene.add(playheadPole);
+
+const recMarkers = new THREE.Group();
+recMarkers.visible = false;
+scene.add(recMarkers);
+
+/* ================= 全局状态 ================= */
+let currentPoints = null;
+let trackCurve = null;
+let trackLen = 0;
+let sceneRadius = 10;
+let trackCenter = { x: 0, z: 0 };
+let trackBoxCenter = new THREE.Vector3();
+let trackBoxSize = new THREE.Vector3();
+let trackSphereRadius = 1;
+let trackMinElevation = 0;
+let gridMesh = null;
+let groundMode = 'satellite';
+let colorMode = 'elevation';
+let sampler = null;
+let speedMax = 0;
+let hasSpeed = false;
+let hasHr = false;
+let hasTime = false;
+let totalTime = 0;
+let playheadU = 0;
+let playbackSpeed = 1;
+let isPlaying = false;
+let playStartTime = 0;
+let playStartU = 0;
+let terrainData = null;   // 地形数据缓存（DEM + 卫星纹理）
+let terrainMesh = null;
+let terrainLoading = false;
+let rec = null;           // 活动录制状态 { active, startTime, recorder, duration, maxDuration }
+const recState = { mode: 'follow', height: 0, look: 0.3, duration: 15, syncTrack: true, format: 'webm' };
+let recPoints = [];       // [{ name, pos, kind }]
+let trackVecs = [];
+let bearingDeg = 0;      // 卫星图模式下的方位角（0 = 北朝上）
+
+const fileInput      = document.getElementById('file');
+const elevScaleInput = document.getElementById('elevScale');
+const elevValEl      = document.getElementById('elevVal');
+const exportGLBBtn   = document.getElementById('exportGLB');
+const groundModeSel  = document.getElementById('groundMode');
+const recModeSel     = document.getElementById('recMode');
+const recPointSel    = document.getElementById('recPoint');
+const recPointRow    = document.getElementById('recPointRow');
+const recPointPick   = document.getElementById('recPointPick');
+const recHeightRow   = document.getElementById('recHeightRow');
+const recHeightInput = document.getElementById('recHeight');
+const recHeightValEl = document.getElementById('recHeightVal');
+const recLookRow     = document.getElementById('recLookRow');
+const recLookInput   = document.getElementById('recLook');
+const recLookValEl   = document.getElementById('recLookVal');
+const recSyncInput   = document.getElementById('recSync');
+const recFormatSel   = document.getElementById('recFormat');
+const recDurationInput = document.getElementById('recDuration');
+const recDurValEl    = document.getElementById('recDurVal');
+const recBaseHint    = document.getElementById('recBaseHint');
+const recStartBtn    = document.getElementById('recStart');
+const colorModeSel   = document.getElementById('colorMode');
+const playBtn        = document.getElementById('playBtn');
+const playSpeedInput = document.getElementById('playSpeed');
+const speedValEl     = document.getElementById('speedVal');
+const playheadSlider = document.getElementById('playhead');
+const tlLabelEl      = document.getElementById('tlLabel');
+const dSpeedEl       = document.getElementById('dSpeed');
+const dEleEl         = document.getElementById('dEle');
+const dHrEl          = document.getElementById('dHr');
+const dPosEl         = document.getElementById('dPos');
+const panSpeedInput  = document.getElementById('panSpeed');
+const panSpeedValEl  = document.getElementById('panSpeedVal');
+const zoomSpeedInput = document.getElementById('zoomSpeed');
+const zoomSpeedValEl = document.getElementById('zoomSpeedVal');
+const dialSvg        = document.getElementById('dial');
+const bearingValEl   = document.getElementById('bearingVal');
+const attributionEl  = document.getElementById('attribution');
+const statusEl       = document.getElementById('status');
+const status = msg => { statusEl.textContent = msg; };
+
+/* ================= 面板收起/展开 ================= */
+function setupCollapse(btn, body) {
+  btn.addEventListener('click', () => {
+    const collapsed = body.style.display === 'none';
+    body.style.display = collapsed ? '' : 'none';
+    btn.textContent = collapsed ? '收起' : '展开';
+  });
+}
+setupCollapse(document.getElementById('toolbarCollapse'), document.getElementById('toolbarBody'));
+setupCollapse(document.getElementById('helpCollapse'), document.getElementById('helpBody'));
+setupCollapse(document.getElementById('statusCollapse'), document.getElementById('statusBody'));
+setupCollapse(document.getElementById('recCollapse'), document.getElementById('recBody'));
+
+/* ================= 颜色映射 ================= */
+function colorForT(t) {
+  t = THREE.MathUtils.clamp(t, 0, 1);
+  for (let i = 0; i < COLORMAP.length - 1; i++) {
+    const [t0, c0] = COLORMAP[i], [t1, c1] = COLORMAP[i + 1];
+    if (t <= t1) { const f = (t - t0) / ((t1 - t0) || 1); return c0.clone().lerp(c1, f); }
+  }
+  return COLORMAP[COLORMAP.length - 1][1].clone();
+}
+
+/* ================= 采样器 ================= */
+function makeSampler(points, values) {
+  const n = points.length;
+  const lon0 = points[0].lon, lat0 = points[0].lat;
+  const ox = mercX(lon0), oy = mercY(lat0);
+  const cum = new Array(n); cum[0] = 0;
+  let px = mercX(points[0].lon) - ox, py = mercY(points[0].lat) - oy;
+  for (let i = 1; i < n; i++) {
+    const x = mercX(points[i].lon) - ox, y = mercY(points[i].lat) - oy;
+    cum[i] = cum[i - 1] + Math.hypot(x - px, y - py);
+    px = x; py = y;
+  }
+  const total = cum[n - 1] || 1;
+  return (u) => {
+    const d = THREE.MathUtils.clamp(u, 0, 1) * total;
+    let lo = 0, hi = n - 1;
+    while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (cum[mid] <= d) lo = mid; else hi = mid; }
+    const seg = cum[hi] - cum[lo];
+    const f = seg > 0 ? (d - cum[lo]) / seg : 0;
+    const a = values[lo], b = values[hi];
+    if (a == null && b == null) return null;
+    if (a == null) return b;
+    if (b == null) return a;
+    return a + (b - a) * f;
+  };
+}
+
+function buildSamplers(points) {
+  hasSpeed = points.some(p => p.speed != null);
+  hasHr = points.some(p => p.hr != null);
+  speedMax = 0;
+  if (hasSpeed) for (const p of points) if (p.speed != null && p.speed > speedMax) speedMax = p.speed;
+
+  const t0 = points.find(p => p.time != null);
+  const t0s = t0 ? Date.parse(t0.time) / 1000 : null;
+  const timeSecs = points.map(p => (p.time && t0s != null ? Date.parse(p.time) / 1000 - t0s : null));
+  hasTime = t0s != null;
+  totalTime = 0;
+  if (hasTime) { for (const t of timeSecs) if (t != null && t > totalTime) totalTime = t; if (totalTime <= 0) hasTime = false; }
+
+  sampler = {
+    speed: hasSpeed ? makeSampler(points, points.map(p => p.speed)) : null,
+    ele: makeSampler(points, points.map(p => p.ele)),
+    hr: hasHr ? makeSampler(points, points.map(p => p.hr)) : null,
+    lat: makeSampler(points, points.map(p => p.lat)),
+    lon: makeSampler(points, points.map(p => p.lon)),
+    time: hasTime ? makeSampler(points, timeSecs) : null,
+  };
+}
+
+function uAtTime(t) {
+  if (!sampler || !sampler.time) return 0;
+  let lo = 0, hi = 1;
+  for (let k = 0; k < 48; k++) {
+    const mid = (lo + hi) / 2;
+    const tm = sampler.time(mid);
+    if (tm == null) { lo = mid; continue; }
+    if (tm < t) lo = mid; else hi = mid;
+  }
+  return (lo + hi) / 2;
+}
+
+function formatTime(sec) {
+  if (sec == null || !isFinite(sec)) return '--:--:--';
+  sec = Math.max(0, Math.floor(sec));
+  const p = n => String(n).padStart(2, '0');
+  return p(Math.floor(sec / 3600)) + ':' + p(Math.floor((sec % 3600) / 60)) + ':' + p(sec % 60);
+}
+
+/* ================= 文件解析（直接 DOM） ================= */
+const els = (doc, name) => doc.getElementsByTagNameNS('*', name);
+const nodeText = (parent, name) => {
+  const n = parent.getElementsByTagNameNS('*', name)[0];
+  return n ? n.textContent.trim() : null;
+};
+const numOrNull = v => (v != null && v !== '' ? parseFloat(v) : null);
+
+function parseGPX(doc) {
+  const pts = [];
+  for (const trkpt of els(doc, 'trkpt')) {
+    pts.push({
+      lon: parseFloat(trkpt.getAttribute('lon')),
+      lat: parseFloat(trkpt.getAttribute('lat')),
+      ele: numOrNull(nodeText(trkpt, 'ele')),
+      time: nodeText(trkpt, 'time'),
+      hr: numOrNull(nodeText(trkpt, 'hr')),
+      speed: numOrNull(nodeText(trkpt, 'speed')),
+      distance: numOrNull(nodeText(trkpt, 'distance')),
+    });
+  }
+  return pts;
+}
+
+function parseKML(doc) {
+  const pts = [];
+  for (const ls of els(doc, 'LineString')) {
+    const coordEl = ls.getElementsByTagNameNS('*', 'coordinates')[0];
+    if (!coordEl) continue;
+    for (const triple of coordEl.textContent.trim().split(/\s+/)) {
+      if (!triple) continue;
+      const p = triple.split(',').map(Number);
+      pts.push({ lon: p[0], lat: p[1], ele: p.length > 2 ? p[2] : null,
+                 time: null, hr: null, speed: null, distance: null });
+    }
+  }
+  if (!pts.length) {
+    for (const c of els(doc, 'coord')) {
+      const p = c.textContent.trim().split(/\s+/).map(Number);
+      pts.push({ lon: p[0], lat: p[1], ele: p.length > 2 ? p[2] : null,
+                 time: null, hr: null, speed: null, distance: null });
+    }
+  }
+  return pts;
+}
+
+function parseTrack(text, filename) {
+  const isKml = /\.kml$/i.test(filename);
+  const doc = new DOMParser().parseFromString(text, 'application/xml');
+  if (doc.getElementsByTagName('parsererror').length) throw new Error('XML 解析失败');
+  return isKml ? parseKML(doc) : parseGPX(doc);
+}
+
+/* ================= 坐标转换（Web Mercator） ================= */
+function pointsToVectors(points, elevScale) {
+  const lon0 = points[0].lon, lat0 = points[0].lat;
+  const ox = mercX(lon0), oy = mercY(lat0);
+  let minE = Infinity, maxE = -Infinity;
+  for (const p of points) { const e = p.ele ?? 0; if (e < minE) minE = e; if (e > maxE) maxE = e; }
+  const eRange = (maxE - minE) || 0;
+  const vecs = points.map(p => new THREE.Vector3(
+    mercX(p.lon) - ox,
+    ((p.ele ?? 0) - minE) * elevScale,
+    mercY(p.lat) - oy
+  ));
+  return { vecs, eRange, minE };
+}
+
+/* ================= 场景构建 ================= */
+function clearGroup(group) {
+  for (let i = group.children.length - 1; i >= 0; i--) {
+    const c = group.children[i];
+    group.remove(c);
+    c.traverse(o => {
+      if (o.geometry) o.geometry.dispose();
+      const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
+      for (const m of mats) { if (m.map) m.map.dispose(); m.dispose(); }
+    });
+  }
+}
+
+function buildGround(horiz) {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 512;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#1b2230'; ctx.fillRect(0, 0, 512, 512);
+  ctx.strokeStyle = 'rgba(140,170,220,0.28)'; ctx.lineWidth = 2;
+  const n = 16;
+  for (let i = 0; i <= n; i++) {
+    const p = (i / n) * 512;
+    ctx.beginPath(); ctx.moveTo(p, 0); ctx.lineTo(p, 512); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, p); ctx.lineTo(512, p); ctx.stroke();
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const plane = new THREE.Mesh(
+    new THREE.PlaneGeometry(horiz * 2.5, horiz * 2.5),
+    new THREE.MeshBasicMaterial({ map: tex })
+  );
+  plane.rotation.x = -Math.PI / 2;
+  plane.position.y = 0;
+  plane.name = 'Ground';
+  return plane;
+}
+
+function buildScene(points, elevScale, mode = 'elevation') {
+  clearGroup(exportGroup);
+
+  const { vecs, eRange, minE } = pointsToVectors(points, elevScale);
+  if (vecs.length < 2) return;
+  trackMinElevation = minE;
+
+  const box = new THREE.Box3().setFromPoints(vecs);
+  const center = box.getCenter(new THREE.Vector3());
+  trackCenter = { x: center.x, z: center.z };
+  const size = box.getSize(new THREE.Vector3());
+  const horiz = Math.max(size.x, size.z, 1e-6);
+  const tubeRadius = THREE.MathUtils.clamp(horiz * 0.002, 0.05, 200);
+  const baseOffset = tubeRadius * 1.5;   // 抬升轨迹，避免在地形上穿模
+  const ySpan = eRange * elevScale;
+  playheadMarker.scale.setScalar(Math.max(tubeRadius * 2.0, 0.1));
+
+  const v = vecs.map(p => new THREE.Vector3(p.x - center.x, p.y + baseOffset, p.z - center.z));
+  trackVecs = v;
+
+  // 轨迹包围盒（用于取景，不含过大的网格地面）
+  const tb = new THREE.Box3().setFromPoints(v);
+  tb.getCenter(trackBoxCenter);
+  tb.getSize(trackBoxSize);
+  trackSphereRadius = tb.getBoundingSphere(new THREE.Sphere()).radius;
+
+  trackCurve = new THREE.CatmullRomCurve3(v, false, 'catmullrom', 0.5);
+  trackLen = Math.max(trackCurve.getLength(), 1e-6);
+
+  const tubularSegments = Math.min(1200, Math.max(64, v.length * 2));
+  const radialSegs = 8;
+  const tubeGeo = new THREE.TubeGeometry(trackCurve, tubularSegments, tubeRadius, radialSegs, false);
+
+  const pos = tubeGeo.attributes.position;
+  const colors = new Float32Array(pos.count * 3);
+  const vertsPerRing = radialSegs + 1;
+  const useSpeed = (mode === 'speed' && sampler && sampler.speed);
+  for (let i = 0; i < pos.count; i++) {
+    let t;
+    if (useSpeed) {
+      const seg = Math.floor(i / vertsPerRing);
+      const sp = sampler.speed(seg / tubularSegments);
+      t = speedMax > 0 ? THREE.MathUtils.clamp((sp ?? 0) / speedMax, 0, 1) : 0.5;
+    } else {
+      const y = pos.getY(i) - baseOffset;
+      t = ySpan > 0 ? THREE.MathUtils.clamp(y / ySpan, 0, 1) : 0.5;
+    }
+    const c = colorForT(t);
+    colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
+  }
+  tubeGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+  const tube = new THREE.Mesh(tubeGeo,
+    new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.55, metalness: 0.15 }));
+  tube.name = 'Track';
+  exportGroup.add(tube);
+
+  gridMesh = buildGround(horiz);
+  exportGroup.add(gridMesh);
+
+  sceneRadius = Math.max(horiz, ySpan, 1);
+}
+
+function loadSatellite(points) {
+  clearGroup(satelliteGroup);
+  if (!points || points.length < 2) return;
+
+  const { z, minX, maxX, minY, maxY } = computeTileRange(points);
+  const n = Math.pow(2, z);
+  const tileM = WORLD_SIZE / n;
+  const ox = mercX(points[0].lon), oy = mercY(points[0].lat);
+  const cx0 = trackCenter.x, cz0 = trackCenter.z;
+
+  for (let tx = minX; tx <= maxX; tx++) {
+    for (let ty = minY; ty <= maxY; ty++) {
+      const west  = tx / n * WORLD_SIZE - WORLD_SIZE / 2;
+      const north = WORLD_SIZE / 2 - ty / n * WORLD_SIZE;
+      const cx = (west + tileM / 2) - ox - cx0;
+      const cz = (north - tileM / 2) - oy - cz0;
+
+      const url = ESRI_TILE_URL.replace('{z}', z).replace('{y}', ty).replace('{x}', tx);
+      const mat = new THREE.MeshBasicMaterial({ color: 0x1b2230 });
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(tileM, tileM), mat);
+      mesh.rotation.x = -Math.PI / 2;
+      mesh.position.set(cx, 0, cz);
+      mesh.visible = false;
+      satelliteGroup.add(mesh);
+
+      tileLoader.load(url,
+        (tex) => {
+          tex.colorSpace = THREE.SRGBColorSpace;
+          tex.flipY = false;
+          mat.map = tex; mat.color.set(0xffffff); mat.needsUpdate = true;
+          mesh.visible = true;
+        },
+        undefined,
+        () => { mesh.visible = false; }
+      );
+    }
+  }
+}
+
+/* ================= 真实地形（DEM 高程 + 卫星纹理） ================= */
+function loadImage(url) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('瓦片加载失败 ' + url));
+    img.src = url;
+  });
+}
+
+function decodeTerrarium(img) {
+  const w = img.naturalWidth, h = img.naturalHeight;
+  const canvas = document.createElement('canvas');
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(img, 0, 0);
+  const d = ctx.getImageData(0, 0, w, h).data;
+  const ele = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) {
+    ele[i] = (d[i * 4] * 256 + d[i * 4 + 1] + d[i * 4 + 2] / 256) - 32768;
+  }
+  return { w, h, ele };
+}
+
+function sampleDemAt(tileXf, tileYf, demTiles) {
+  const tx = Math.floor(tileXf), ty = Math.floor(tileYf);
+  const t = demTiles[tx + ',' + ty];
+  if (!t) return null;
+  const px = (tileXf - tx) * 256, py = (tileYf - ty) * 256;
+  const x0 = Math.min(255, Math.max(0, Math.floor(px)));
+  const y0 = Math.min(255, Math.max(0, Math.floor(py)));
+  const x1 = Math.min(255, x0 + 1), y1 = Math.min(255, y0 + 1);
+  const fx = px - x0, fy = py - y0;
+  const i00 = y0 * 256 + x0, i10 = y0 * 256 + x1, i01 = y1 * 256 + x0, i11 = y1 * 256 + x1;
+  return (1 - fy) * ((1 - fx) * t.ele[i00] + fx * t.ele[i10]) +
+         fy * ((1 - fx) * t.ele[i01] + fx * t.ele[i11]);
+}
+
+async function buildTerrainData(points) {
+  const z = Math.min(computeTileRange(points).z, 15); // AWS terrarium 最大 zoom 15
+  const r = tileRangeAt(points, z);
+  const tilesX = r.maxX - r.minX + 1, tilesY = r.maxY - r.minY + 1;
+
+  const demTiles = {};
+  const satImgs = new Array(tilesX * tilesY);
+  const jobs = [];
+  for (let ty = r.minY; ty <= r.maxY; ty++) {
+    for (let tx = r.minX; tx <= r.maxX; tx++) {
+      const key = tx + ',' + ty;
+      jobs.push(loadImage(AWS_TERRAIN_URL.replace('{z}', z).replace('{x}', tx).replace('{y}', ty))
+        .then(img => { demTiles[key] = decodeTerrarium(img); }));
+      const s = (ty - r.minY) * tilesX + (tx - r.minX);
+      jobs.push(loadImage(ESRI_TILE_URL.replace('{z}', z).replace('{y}', ty).replace('{x}', tx))
+        .then(img => { satImgs[s] = img; }));
+    }
+  }
+  await Promise.all(jobs);
+
+  const canvas = document.createElement('canvas');
+  canvas.width = tilesX * 256; canvas.height = tilesY * 256;
+  const ctx = canvas.getContext('2d');
+  for (let sy = 0; sy < tilesY; sy++) {
+    for (let sx = 0; sx < tilesX; sx++) {
+      const img = satImgs[sy * tilesX + sx];
+      if (img) ctx.drawImage(img, sx * 256, sy * 256);
+    }
+  }
+
+  // DEM 与 GPS 高程的平均偏差，让轨迹贴合地形
+  const sampleLonLat = (lon, lat) =>
+    sampleDemAt(lonToTileXf(lon, z), latToTileYf(lat, z), demTiles);
+  let sum = 0, count = 0;
+  for (const p of points) {
+    if (p.ele == null) continue;
+    const dem = sampleLonLat(p.lon, p.lat);
+    if (dem == null) continue;
+    sum += dem - p.ele; count++;
+  }
+  const demOffset = count ? sum / count : 0;
+
+  const n = Math.pow(2, z);
+  const west = r.minX / n * WORLD_SIZE - WORLD_SIZE / 2;
+  const east = (r.maxX + 1) / n * WORLD_SIZE - WORLD_SIZE / 2;
+  const north = WORLD_SIZE / 2 - r.minY / n * WORLD_SIZE;
+  const south = WORLD_SIZE / 2 - (r.maxY + 1) / n * WORLD_SIZE;
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+
+  return { r, demTiles, tex, demOffset, west, east, north, south, tilesX, tilesY };
+}
+
+function buildTerrainMesh(data, points, elevScale) {
+  clearGroup(terrainGroup);
+  terrainMesh = null;
+  const { r, demTiles, tex, demOffset, west, east, north, south, tilesX, tilesY } = data;
+  const spanX = east - west, spanZ = north - south;
+  const ox = mercX(points[0].lon), oy = mercY(points[0].lat);
+  const cx0 = trackCenter.x, cz0 = trackCenter.z;
+  const minE = trackMinElevation;
+
+  const gw = TERRAIN_GRID, gh = TERRAIN_GRID;
+  const vertCount = (gw + 1) * (gh + 1);
+  const positions = new Float32Array(vertCount * 3);
+  const uvs = new Float32Array(vertCount * 2);
+  let k = 0;
+  for (let j = 0; j <= gh; j++) {
+    const fz = j / gh;
+    for (let i = 0; i <= gw; i++) {
+      const fx = i / gw;
+      const mx = west + fx * spanX;
+      const my = south + fz * spanZ;
+      const tileXf = r.minX + fx * tilesX;
+      const tileYf = r.minY + (1 - fz) * tilesY;
+      const dem = sampleDemAt(tileXf, tileYf, demTiles);
+      const ele = (dem != null ? dem : 0) - demOffset - minE;
+      positions[k * 3] = mx - ox - cx0;
+      positions[k * 3 + 1] = ele * elevScale;
+      positions[k * 3 + 2] = my - oy - cz0;
+      uvs[k * 2] = fx;
+      uvs[k * 2 + 1] = fz;
+      k++;
+    }
+  }
+  const indices = [];
+  for (let j = 0; j < gh; j++) {
+    for (let i = 0; i < gw; i++) {
+      const a = j * (gw + 1) + i, b = a + 1, c = a + (gw + 1), d = c + 1;
+      indices.push(a, c, b, b, c, d);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+
+  const mat = new THREE.MeshStandardMaterial({
+    map: tex, roughness: 0.9, metalness: 0, side: THREE.DoubleSide,
+  });
+  terrainMesh = new THREE.Mesh(geo, mat);
+  terrainMesh.name = 'Terrain-Mesh';
+  terrainGroup.add(terrainMesh);
+}
+
+async function ensureTerrainBuilt() {
+  if (!currentPoints || terrainLoading) return;
+  if (terrainData) return;
+  terrainLoading = true;
+  status('正在加载真实地形数据…');
+  try {
+    terrainData = await buildTerrainData(currentPoints);
+    buildTerrainMesh(terrainData, currentPoints, parseFloat(elevScaleInput.value));
+    status('真实地形已加载');
+  } catch (err) {
+    status('地形数据加载失败（可能是跨域限制）：' + (err && err.message ? err.message : err));
+    groundMode = 'satellite';
+    groundModeSel.value = 'satellite';
+    applyGroundMode();
+    applyViewConstraint();
+  } finally {
+    terrainLoading = false;
+  }
+}
+
+function applyGroundMode() {
+  satelliteGroup.visible = (groundMode === 'satellite');
+  terrainGroup.visible = (groundMode === 'terrain');
+  if (gridMesh) gridMesh.visible = (groundMode === 'grid');
+  attributionEl.style.display = ((groundMode === 'satellite' || groundMode === 'terrain') && currentPoints) ? 'block' : 'none';
+}
+
+/* ================= 视角：方位角 + 约束 ================= */
+function applyBearing() {
+  const r = bearingDeg * DEG2RAD;
+  camera.up.set(Math.sin(r), 0, Math.cos(r));
+}
+
+function frameCameraFlat() {
+  const horiz = Math.max(trackBoxSize.x, trackBoxSize.z, 1e-6);
+  const h = horiz * 1.15 / (2 * Math.tan(camera.fov * DEG2RAD / 2));
+  const c = trackBoxCenter;
+  camera.position.set(c.x, c.y + h, c.z);
+  camera.near = Math.max(h / 1000, 0.01); camera.far = h * 1000;
+  camera.updateProjectionMatrix();
+  controls.target.copy(c);
+  applyBearing();
+  camera.lookAt(c);
+  controls.update();
+  sceneRadius = h;
+}
+
+function frameCamera() {
+  const r = Math.max(trackSphereRadius, 1);
+  const dist = r * 2.2;
+  const c = trackBoxCenter;
+  camera.up.set(0, 1, 0);
+  camera.position.set(c.x + dist * 0.7, c.y + dist * 0.55, c.z + dist * 0.7);
+  camera.near = Math.max(r / 1000, 0.01); camera.far = r * 1000;
+  camera.updateProjectionMatrix();
+  controls.target.copy(c);
+  camera.lookAt(c);
+  controls.update();
+  sceneRadius = r;
+}
+
+function applyViewConstraint() {
+  const flat = (groundMode === 'satellite');
+  if (flat) {
+    controls.enableRotate = false;
+    controls.minPolarAngle = 0;
+    controls.maxPolarAngle = 0;
+    controls.mouseButtons.LEFT = THREE.MOUSE.PAN;
+    controls.mouseButtons.RIGHT = THREE.MOUSE.PAN;
+    frameCameraFlat();
+  } else {
+    controls.enableRotate = true;
+    controls.minPolarAngle = 0;
+    controls.maxPolarAngle = Math.PI;
+    controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
+    controls.mouseButtons.RIGHT = THREE.MOUSE.PAN;
+    frameCamera();
+  }
+}
+
+/* ================= 播放头 / 仪表盘 ================= */
+function updateDashboard(u) {
+  if (!sampler) return;
+  const ele = sampler.ele(u);
+  const sp = sampler.speed ? sampler.speed(u) : null;
+  const hr = sampler.hr ? sampler.hr(u) : null;
+  dEleEl.textContent = ele != null ? ele.toFixed(0) + ' m' : '—';
+  dSpeedEl.textContent = sp != null ? (sp * 3.6).toFixed(1) + ' km/h' : '—';
+  dHrEl.textContent = hr != null ? hr.toFixed(0) + ' bpm' : '—';
+  const lat = sampler.lat(u), lon = sampler.lon(u);
+  dPosEl.textContent = (lat != null && lon != null)
+    ? '位置 ' + lon.toFixed(5) + ', ' + lat.toFixed(5) : '—';
+}
+
+function sliderToU(val) {
+  if (hasTime && sampler && sampler.time) return uAtTime(parseFloat(val));
+  return parseFloat(val) / 1000;
+}
+function uToSlider(u) {
+  if (hasTime && sampler && sampler.time) return Math.round(sampler.time(u));
+  return Math.round(u * 1000);
+}
+
+function updatePlayhead(u) {
+  playheadU = THREE.MathUtils.clamp(u, 0, 1);
+  if (trackCurve) {
+    const p = trackCurve.getPointAt(playheadU);
+    playheadMarker.position.copy(p);
+    playheadMarker.visible = true;
+    const arr = polePositions.array;
+    arr[0] = p.x; arr[1] = 0; arr[2] = p.z;
+    arr[3] = p.x; arr[4] = p.y; arr[5] = p.z;
+    polePositions.needsUpdate = true;
+    playheadPole.visible = true;
+  }
+  updateDashboard(playheadU);
+  playheadSlider.value = uToSlider(playheadU);
+  if (hasTime && sampler && sampler.time) {
+    tlLabelEl.textContent = '时间轴 ' + formatTime(sampler.time(playheadU)) + ' / ' + formatTime(totalTime);
+  } else {
+    tlLabelEl.textContent = '进度 ' + (playheadU * 100).toFixed(0) + '%';
+  }
+}
+
+/* ================= 文件读取 ================= */
+function haversine(a, b) {
+  const toRad = d => d * Math.PI / 180;
+  const dLat = toRad(b.lat - a.lat), dLon = toRad(b.lon - a.lon);
+  const s = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R_EARTH * Math.asin(Math.sqrt(s));
+}
+function totalDistance(pts) {
+  let d = 0; for (let i = 1; i < pts.length; i++) d += haversine(pts[i - 1], pts[i]);
+  return d;
+}
+
+function updateColorModeOptions() {
+  const speedOpt = colorModeSel.querySelector('option[value="speed"]');
+  if (hasSpeed) {
+    if (!speedOpt) {
+      const o = document.createElement('option');
+      o.value = 'speed'; o.textContent = '按速度着色';
+      colorModeSel.appendChild(o);
+    }
+  } else {
+    if (speedOpt) speedOpt.remove();
+    if (colorMode === 'speed') { colorMode = 'elevation'; colorModeSel.value = 'elevation'; }
+  }
+}
+
+fileInput.addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  try {
+    const text = await file.text();
+    const points = parseTrack(text, file.name);
+    if (!points || points.length < 2) { status('未解析到足够的轨迹点（至少 2 个）'); return; }
+    currentPoints = points;
+    buildSamplers(points);
+    updateColorModeOptions();
+    buildScene(points, parseFloat(elevScaleInput.value), colorMode);
+    loadSatellite(points);
+    terrainData = null;
+    terrainMesh = null;
+    clearGroup(terrainGroup);
+    applyGroundMode();
+    bearingDeg = 0;
+    updateDialUI();
+    applyViewConstraint();
+    if (groundMode === 'terrain') ensureTerrainBuilt();
+    playheadSlider.max = hasTime ? Math.round(totalTime) : 1000;
+    updatePlayhead(0);
+    computeRecommendedPoints();
+    refreshRecPointSelect();
+    updateRecModeOptions();
+    exportGLBBtn.disabled = false;
+
+    const eleArr = points.map(p => p.ele).filter(v => v != null);
+    const lines = [`已加载：${file.name}`, `轨迹点：${points.length}`,
+      `水平距离：${(totalDistance(points) / 1000).toFixed(2)} km`];
+    if (eleArr.length) lines.push(`海拔范围：${Math.min(...eleArr).toFixed(0)} ~ ${Math.max(...eleArr).toFixed(0)} m`);
+    else lines.push('无海拔数据（按平地处理）');
+    if (hasSpeed) lines.push(`最大速度：${(speedMax * 3.6).toFixed(1)} km/h`);
+    if (hasHr) {
+      const hrs = points.map(p => p.hr).filter(v => v != null);
+      lines.push(`心率范围：${Math.min(...hrs)} ~ ${Math.max(...hrs)} bpm`);
+    }
+    if (hasTime) lines.push(`时间范围：${formatTime(0)} → ${formatTime(totalTime)}`);
+    status(lines.join('\n'));
+  } catch (err) {
+    status('解析失败：' + (err && err.message ? err.message : err));
+  }
+});
+
+/* ================= 海拔夸张滑条 ================= */
+let rebuildPending = false;
+elevScaleInput.addEventListener('input', () => {
+  elevValEl.textContent = parseFloat(elevScaleInput.value).toFixed(1);
+  if (currentPoints && !rebuildPending) {
+    rebuildPending = true;
+    requestAnimationFrame(() => {
+      buildScene(currentPoints, parseFloat(elevScaleInput.value), colorMode);
+      applyGroundMode();
+      if (terrainData) buildTerrainMesh(terrainData, currentPoints, parseFloat(elevScaleInput.value));
+      computeRecommendedPoints();
+      refreshRecPointSelect();
+      refreshRecPointMarkers();
+      updatePlayhead(playheadU);
+      rebuildPending = false;
+    });
+  }
+});
+
+/* ================= 着色模式 / 底图切换 ================= */
+colorModeSel.addEventListener('change', () => {
+  colorMode = colorModeSel.value;
+  if (currentPoints) {
+    buildScene(currentPoints, parseFloat(elevScaleInput.value), colorMode);
+    applyGroundMode();
+    updatePlayhead(playheadU);
+  }
+});
+
+groundModeSel.addEventListener('change', () => {
+  groundMode = groundModeSel.value;
+  applyGroundMode();
+  if (groundMode === 'terrain') ensureTerrainBuilt();
+  updateRecModeOptions();
+  applyViewConstraint();
+});
+
+/* ================= 播放控制 ================= */
+playSpeedInput.addEventListener('input', () => {
+  playbackSpeed = parseFloat(playSpeedInput.value);
+  speedValEl.textContent = (Math.round(playbackSpeed * 100) / 100).toString();
+});
+
+playBtn.addEventListener('click', () => {
+  if (!trackCurve) return;
+  if (isPlaying) {
+    isPlaying = false;
+    playBtn.textContent = '▶ 播放';
+  } else {
+    if (playheadU >= 1) { playheadU = 0; }
+    isPlaying = true;
+    playStartTime = performance.now();
+    playStartU = playheadU;
+    playBtn.textContent = '⏸ 暂停';
+  }
+});
+
+playheadSlider.addEventListener('input', () => {
+  if (isPlaying) { isPlaying = false; playBtn.textContent = '▶ 播放'; }
+  updatePlayhead(sliderToU(playheadSlider.value));
+});
+
+/* ================= 灵敏度滑杆 ================= */
+panSpeedInput.addEventListener('input', () => {
+  controls.panSpeed = parseFloat(panSpeedInput.value);
+  panSpeedValEl.textContent = parseFloat(panSpeedInput.value).toFixed(1);
+});
+zoomSpeedInput.addEventListener('input', () => {
+  controls.zoomSpeed = parseFloat(zoomSpeedInput.value);
+  zoomSpeedValEl.textContent = parseFloat(zoomSpeedInput.value).toFixed(1);
+});
+
+/* ================= 方位角圆盘 ================= */
+let needle = null;
+let dialDragging = false;
+
+function buildDial() {
+  const NS = 'http://www.w3.org/2000/svg';
+  const cx = 70, cy = 70, r = 60;
+  const circle = document.createElementNS(NS, 'circle');
+  circle.setAttribute('cx', cx); circle.setAttribute('cy', cy);
+  circle.setAttribute('r', r); circle.setAttribute('fill', 'none');
+  circle.setAttribute('stroke', 'rgba(255,255,255,.3)'); circle.setAttribute('stroke-width', '1.5');
+  dialSvg.appendChild(circle);
+
+  for (let deg = 0; deg < 360; deg += 15) {
+    const rad = deg * DEG2RAD;
+    const major = (deg % 30 === 0);
+    const r1 = major ? 50 : 54;
+    const x1 = cx + Math.sin(rad) * r1, y1 = cy - Math.cos(rad) * r1;
+    const x2 = cx + Math.sin(rad) * r,  y2 = cy - Math.cos(rad) * r;
+    const line = document.createElementNS(NS, 'line');
+    line.setAttribute('x1', x1); line.setAttribute('y1', y1);
+    line.setAttribute('x2', x2); line.setAttribute('y2', y2);
+    line.setAttribute('stroke', 'rgba(255,255,255,.4)');
+    line.setAttribute('stroke-width', major ? '2' : '1');
+    dialSvg.appendChild(line);
+    if (deg % 30 === 0) {
+      const lr = 40;
+      const lx = cx + Math.sin(rad) * lr, ly = cy - Math.cos(rad) * lr;
+      const text = document.createElementNS(NS, 'text');
+      text.setAttribute('x', lx); text.setAttribute('y', ly + 3);
+      text.setAttribute('text-anchor', 'middle');
+      text.setAttribute('font-size', '9'); text.setAttribute('fill', '#8b98a9');
+      text.textContent = String(deg);
+      dialSvg.appendChild(text);
+    }
+  }
+
+  needle = document.createElementNS(NS, 'line');
+  needle.setAttribute('x1', cx); needle.setAttribute('y1', cy);
+  needle.setAttribute('x2', cx); needle.setAttribute('y2', cy - 46);
+  needle.setAttribute('stroke', '#ff5533'); needle.setAttribute('stroke-width', '2.5');
+  needle.setAttribute('stroke-linecap', 'round');
+  dialSvg.appendChild(needle);
+
+  const dot = document.createElementNS(NS, 'circle');
+  dot.setAttribute('cx', cx); dot.setAttribute('cy', cy);
+  dot.setAttribute('r', 3.5); dot.setAttribute('fill', '#ff5533');
+  dialSvg.appendChild(dot);
+
+  updateDialUI();
+}
+
+function updateDialUI() {
+  if (needle) needle.setAttribute('transform', `rotate(${bearingDeg} 70 70)`);
+  bearingValEl.textContent = Math.round(bearingDeg) + '°';
+}
+
+function updateDialFromEvent(e) {
+  const rect = dialSvg.getBoundingClientRect();
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+  const dx = e.clientX - cx, dy = e.clientY - cy;
+  if (Math.hypot(dx, dy) < 6) return;
+  let deg = Math.atan2(dx, -dy) / DEG2RAD;
+  if (deg < 0) deg += 360;
+  bearingDeg = deg;
+  applyBearing();
+  updateDialUI();
+}
+
+dialSvg.addEventListener('pointerdown', (e) => {
+  dialDragging = true;
+  dialSvg.setPointerCapture(e.pointerId);
+  updateDialFromEvent(e);
+});
+dialSvg.addEventListener('pointermove', (e) => { if (dialDragging) updateDialFromEvent(e); });
+dialSvg.addEventListener('pointerup', () => { dialDragging = false; });
+dialSvg.addEventListener('pointercancel', () => { dialDragging = false; });
+buildDial();
+
+/* ================= GLB 导出（仅轨迹 + 网格） ================= */
+exportGLBBtn.addEventListener('click', () => {
+  if (!exportGroup.children.length) return;
+  status('正在导出 .glb …');
+  new GLTFExporter().parse(exportGroup, (result) => {
+    const blob = new Blob([result], { type: 'model/gltf-binary' });
+    downloadBlob(blob, 'gps-track.glb');
+    status('已导出 gps-track.glb（不含卫星影像）');
+  }, (err) => status('导出失败：' + err), { binary: true });
+});
+
+function downloadBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+/* ================= 视频录制（多模式） ================= */
+function easeInOutCubic(t) {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+// 基于地形推荐录制点：沿轨迹的海拔局部极大值（山峰/制高点）
+function computeRecommendedPoints() {
+  recPoints = recPoints.filter(p => p.kind === 'custom'); // 保留自定义点
+  if (!currentPoints || !trackVecs.length) return;
+  const n = currentPoints.length;
+  // 严格局部极大值（排除平台，避免推荐出重复高程的点）
+  const peaks = [];
+  for (let i = 1; i < n - 1; i++) {
+    const a = currentPoints[i - 1].ele ?? 0, b = currentPoints[i].ele ?? 0, c = currentPoints[i + 1].ele ?? 0;
+    if (b > a && b > c) peaks.push(i);
+  }
+  peaks.sort((x, y) => (currentPoints[y].ele ?? 0) - (currentPoints[x].ele ?? 0));
+  // 空间去重：相距过近的峰视为同一座山，至少间隔 15% 轨迹长度
+  const totalLen = trackVecs[0].distanceTo(trackVecs[n - 1]) || sceneRadius;
+  const minSep = totalLen * 0.15;
+  const chosen = [];
+  for (const idx of peaks) {
+    const pos = trackVecs[idx];
+    if (chosen.every(c => c.pos.distanceTo(pos) >= minSep)) chosen.push({ idx, pos });
+    if (chosen.length >= 3) break;
+  }
+  if (!chosen.length && n > 1) chosen.push({ idx: Math.floor(n / 2), pos: trackVecs[Math.floor(n / 2)] });
+  for (const c of chosen) {
+    recPoints.push({
+      name: '推荐制高点·海拔' + ((currentPoints[c.idx].ele ?? 0)).toFixed(0) + 'm',
+      pos: c.pos.clone(),
+      kind: 'recommended',
+    });
+  }
+}
+
+function refreshRecPointSelect() {
+  recPointSel.innerHTML = '';
+  recPoints.forEach((p, i) => {
+    const o = document.createElement('option');
+    o.value = String(i); o.textContent = p.name;
+    recPointSel.appendChild(o);
+  });
+  if (!recPoints.length) {
+    const o = document.createElement('option');
+    o.value = '-1'; o.textContent = '无录制点，请先添加';
+    recPointSel.appendChild(o);
+  }
+}
+
+// 把推荐/自定义录制点标注在底图上（选中点高亮）
+function refreshRecPointMarkers() {
+  clearGroup(recMarkers);
+  const usesPoint = (recState.mode === 'fixed' || recState.mode === 'custom');
+  recMarkers.visible = usesPoint && recPoints.length > 0;
+  if (!recMarkers.visible) return;
+  const r = Math.max(sceneRadius * 0.012, 1);
+  const sel = parseInt(recPointSel.value, 10);
+  recPoints.forEach((p, i) => {
+    const marker = new THREE.Mesh(
+      new THREE.SphereGeometry(r, 12, 12),
+      new THREE.MeshBasicMaterial({ color: i === sel ? 0xff5533 : 0x22ccff })
+    );
+    marker.position.copy(p.pos);
+    marker.position.y += r * 2; // 抬离地面，避免被地形遮挡
+    recMarkers.add(marker);
+  });
+}
+
+// 射线拾取地面/地形点（用于点选标定录制点）
+function pickGroundPoint(event) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  const mouse = new THREE.Vector2(
+    ((event.clientX - rect.left) / rect.width) * 2 - 1,
+    -((event.clientY - rect.top) / rect.height) * 2 + 1,
+  );
+  const raycaster = new THREE.Raycaster();
+  raycaster.setFromCamera(mouse, camera);
+  const targets = [];
+  if (terrainGroup.visible && terrainMesh) targets.push(terrainMesh);
+  if (satelliteGroup.visible) targets.push(...satelliteGroup.children);
+  if (gridMesh && gridMesh.visible) targets.push(gridMesh);
+  const hits = raycaster.intersectObjects(targets, false);
+  if (hits.length) return hits[0].point;
+  const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+  const pt = new THREE.Vector3();
+  if (raycaster.ray.intersectPlane(plane, pt)) return pt;
+  return null;
+}
+
+const REC_MODES = {
+  satellite: { center: '居中录制', custom: '自定义点录制', free: '自由录制' },
+  terrain: { follow: '跟随录制', fixed: '定点录制', free: '自由录制' },
+  grid: { free: '自由录制' },
+};
+const BASE_NAMES = { satellite: '平面卫星图', terrain: '真实地形 3D', grid: '网格' };
+
+function updateRecModeOptions() {
+  const modes = REC_MODES[groundMode] || { follow: '跟随录制' };
+  recModeSel.innerHTML = '';
+  for (const [val, label] of Object.entries(modes)) {
+    const o = document.createElement('option');
+    o.value = val; o.textContent = label;
+    recModeSel.appendChild(o);
+  }
+  if (!modes[recState.mode]) recState.mode = Object.keys(modes)[0];
+  recModeSel.value = recState.mode;
+  recBaseHint.textContent = '底图：' + (BASE_NAMES[groundMode] || groundMode);
+  syncRecControls();
+}
+
+function syncRecControls() {
+  const m = recState.mode;
+  const usesPoint = (m === 'fixed' || m === 'custom');
+  recHeightRow.style.display = (m === 'follow' || m === 'fixed' || m === 'center') ? '' : 'none';
+  recLookRow.style.display = (m === 'follow') ? '' : 'none';
+  recPointRow.style.display = usesPoint ? '' : 'none';
+  recPointPick.style.display = usesPoint ? '' : 'none';
+  refreshRecPointMarkers();
+}
+
+// 录制相机姿态：e∈[0,1]（已缓动）→ { pos, target, up? }
+function recPose(e) {
+  const m = recState.mode;
+  if (m === 'follow') {
+    const h = (recState.height || 0.25) * sceneRadius;
+    const look = recState.look * sceneRadius;
+    const pos = trackCurve.getPointAt(e);
+    const ahead = trackCurve.getPointAt(Math.min(1, e + look / trackLen));
+    return { pos: new THREE.Vector3(pos.x, pos.y + h, pos.z), target: ahead };
+  }
+  if (m === 'fixed') {
+    const idx = parseInt(recPointSel.value, 10);
+    const p = (idx >= 0 && recPoints[idx]) ? recPoints[idx].pos : trackBoxCenter;
+    const h = (recState.height || 0.4) * sceneRadius;
+    return { pos: new THREE.Vector3(p.x, p.y + h, p.z), target: trackBoxCenter };
+  }
+  if (m === 'center') {
+    // 静态俯视，无缩放动画，底图填满视角
+    const horiz = Math.max(trackBoxSize.x, trackBoxSize.z, 1e-6);
+    const h = horiz * 1.15 / (2 * Math.tan(camera.fov * DEG2RAD / 2));
+    const p = trackBoxCenter;
+    return {
+      pos: new THREE.Vector3(p.x, h, p.z),
+      target: new THREE.Vector3(p.x, 0, p.z),
+      up: new THREE.Vector3(0, 0, 1),
+    };
+  }
+  if (m === 'custom') {
+    const idx = parseInt(recPointSel.value, 10);
+    const p = (idx >= 0 && recPoints[idx]) ? recPoints[idx].pos : trackBoxCenter;
+    const h = (recState.height || 0.8) * sceneRadius;
+    return {
+      pos: new THREE.Vector3(p.x, h, p.z),
+      target: new THREE.Vector3(p.x, 0, p.z),
+      up: new THREE.Vector3(0, 0, 1),
+    };
+  }
+  return null; // free：由用户实时操作
+}
+
+function stopRecording() {
+  if (!rec || !rec.active) return;
+  rec.active = false;
+  const r = rec.recorder;
+  rec = null;
+  if (r && r.state !== 'inactive') r.stop();
+  recStartBtn.textContent = '● 开始录制';
+  controls.enabled = true;
+  applyViewConstraint();
+}
+
+async function startRecording() {
+  if (!trackCurve) return;
+  if (rec && rec.active) { stopRecording(); return; } // 自由模式下手动停止
+  if (!renderer.domElement.captureStream) {
+    status('当前浏览器不支持 canvas.captureStream，请用 Chrome / Firefox');
+    return;
+  }
+  if (isPlaying) { isPlaying = false; playBtn.textContent = '▶ 播放'; }
+  // 预热：确保地形已构建，并稍候瓦片加载，减少录制中的卡顿
+  status('准备录制…');
+  if (groundMode === 'terrain') await ensureTerrainBuilt();
+  await new Promise(r => setTimeout(r, 300));
+
+  // 16:9 分辨率（自适应屏幕，不超出视口）
+  const savedW = window.innerWidth, savedH = window.innerHeight;
+  let recW = 1280, recH = 720;
+  const sc = Math.min(1, window.innerWidth / recW, window.innerHeight / recH);
+  recW = Math.floor(recW * sc); recH = Math.floor(recH * sc);
+  renderer.setSize(recW, recH);
+  camera.aspect = recW / recH; camera.updateProjectionMatrix();
+
+  // 导出格式
+  const fmt = recState.format;
+  let mime = null, ext = 'webm';
+  if (fmt === 'mp4') {
+    mime = ['video/mp4;codecs=avc1.42E01E', 'video/mp4'].find(m => MediaRecorder.isTypeSupported(m));
+    if (mime) ext = 'mp4'; else status('浏览器不支持 MP4，已回退 WebM');
+  }
+  if (!mime) mime = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'].find(m => MediaRecorder.isTypeSupported(m));
+
+  const stream = renderer.domElement.captureStream(60);
+  const recorder = new MediaRecorder(stream, mime
+    ? { mimeType: mime, videoBitsPerSecond: 12_000_000 } : undefined);
+  const chunks = [];
+  recorder.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+  const restoreResolution = () => {
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
+  };
+  recorder.onstop = () => {
+    restoreResolution();
+    downloadBlob(new Blob(chunks, { type: mime || 'video/webm' }), 'track-recording.' + ext);
+    status('视频已导出：track-recording.' + ext);
+    controls.enabled = true;
+    applyViewConstraint();
+    refreshRecPointMarkers();
+  };
+
+  controls.enabled = (recState.mode === 'free');
+  rec = {
+    active: true, startTime: performance.now(), recorder,
+    duration: recState.duration, maxDuration: recState.mode === 'free' ? 60 : null,
+  };
+  recMarkers.visible = false; // 录制中隐藏录制点图标，避免影响画面
+  recorder.start(200);
+  recStartBtn.textContent = '■ 停止录制';
+  status(recState.mode === 'free' ? '自由录制中：请旋转/缩放视角，点「停止录制」结束' : '录制中…');
+}
+
+// 录制面板事件
+recModeSel.addEventListener('change', () => { recState.mode = recModeSel.value; syncRecControls(); });
+recSyncInput.addEventListener('change', () => { recState.syncTrack = recSyncInput.checked; });
+recFormatSel.addEventListener('change', () => { recState.format = recFormatSel.value; });
+recHeightInput.addEventListener('input', () => {
+  recState.height = parseFloat(recHeightInput.value);
+  recHeightValEl.textContent = recState.height === 0 ? '自动' : recState.height.toFixed(2) + 'x';
+});
+recLookInput.addEventListener('input', () => {
+  recState.look = parseFloat(recLookInput.value);
+  recLookValEl.textContent = recState.look.toFixed(2) + 'x';
+});
+recDurationInput.addEventListener('input', () => {
+  recState.duration = parseFloat(recDurationInput.value);
+  recDurValEl.textContent = recState.duration.toFixed(0) + 's';
+});
+recPointSel.addEventListener('change', () => { refreshRecPointMarkers(); });
+
+let picking = false;
+recPointPick.addEventListener('click', () => {
+  picking = !picking;
+  if (picking) {
+    controls.enabled = false;
+    renderer.domElement.style.cursor = 'crosshair';
+    status('请在地图上点击以标定录制点');
+  } else {
+    controls.enabled = true;
+    renderer.domElement.style.cursor = '';
+    status('已取消点选');
+  }
+});
+renderer.domElement.addEventListener('click', (e) => {
+  if (!picking) return;
+  const pt = pickGroundPoint(e);
+  if (pt) {
+    recPoints.push({ name: '自定义点' + (recPoints.length + 1), pos: pt.clone(), kind: 'custom' });
+    refreshRecPointSelect();
+    recPointSel.value = String(recPoints.length - 1);
+    refreshRecPointMarkers();
+    status('已标定录制点');
+  }
+  picking = false;
+  controls.enabled = true;
+  renderer.domElement.style.cursor = '';
+});
+recStartBtn.addEventListener('click', startRecording);
+
+updateRecModeOptions();
+
+/* ================= 渲染循环 ================= */
+function animate() {
+  requestAnimationFrame(animate);
+  if (rec && rec.active) {
+    if (recState.mode === 'free') {
+      controls.update();
+      if (groundMode === 'satellite') {
+        camera.up.set(Math.sin(bearingDeg * DEG2RAD), 0, Math.cos(bearingDeg * DEG2RAD));
+        camera.lookAt(controls.target);
+      }
+      if (recState.syncTrack) {
+        const raw = Math.min(1, (performance.now() - rec.startTime) / 1000 / recState.duration);
+        updatePlayhead(easeInOutCubic(raw));
+      }
+      renderer.render(scene, camera);
+      if (performance.now() - rec.startTime > 60000) stopRecording();
+    } else {
+      const raw = Math.min(1, (performance.now() - rec.startTime) / 1000 / rec.duration);
+      const e = easeInOutCubic(raw);
+      const pose = recPose(e);
+      if (pose) {
+        camera.position.copy(pose.pos);
+        if (pose.up) camera.up.copy(pose.up); else camera.up.set(0, 1, 0);
+        camera.lookAt(pose.target);
+      }
+      if (recState.syncTrack) updatePlayhead(e);
+      renderer.render(scene, camera);
+      if (raw >= 1) stopRecording();
+    }
+    return;
+  }
+  if (isPlaying) {
+    const u = playStartU + (performance.now() - playStartTime) / 1000 * playbackSpeed / PLAYBACK_DURATION;
+    if (u >= 1) { updatePlayhead(1); isPlaying = false; playBtn.textContent = '▶ 播放'; }
+    else updatePlayhead(u);
+  }
+  controls.update();
+  if (groundMode === 'satellite') {
+    // 卫星图模式：锁定俯视后，仍可绕垂直轴旋转（方位角）
+    camera.up.set(Math.sin(bearingDeg * DEG2RAD), 0, Math.cos(bearingDeg * DEG2RAD));
+    camera.lookAt(controls.target);
+  }
+  renderer.render(scene, camera);
+}
+animate();
+
+window.addEventListener('resize', () => {
+  if (rec && rec.active) return; // 录制中保持固定分辨率
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+</script>
+</body>
+</html>
